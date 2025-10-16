@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+requests
+redis
+python-dotenv
+openai
+apscheduler
+confluent-kafka
+confluent-kafka[avro]
+httpx

@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: ollama
+    ports:
+      - "11434:11434" # Expone el puerto API de Ollama al host
+    volumes:
+      - ollama_data:/root/.ollama # Persiste los modelos descargados
+    restart: unless-stopped
+    # Para habilitar GPU (NVIDIA): descomenta las siguientes líneas
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1 # o 'all'
+    #           capabilities: [gpu]
+
+  redis:
+    image: redis:alpine # Usar imagen ligera de Redis
+    container_name: redis
+    ports:
+      - "6379:6379" # Expone el puerto de Redis al host
+    volumes:
+      - redis_data:/data # Persiste los datos de Redis
+    restart: unless-stopped
+
+volumes:
+  ollama_data: # Define el volumen nombrado
+  redis_data: # Define el volumen para Redis
