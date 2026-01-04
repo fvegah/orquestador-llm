@@ -1,0 +1,38 @@
+# Docker Compose para producción/MVP
+# Usa servicios externos (Supabase, Upstash, OpenAI)
+# Solo levanta la aplicación FastAPI
+
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: contabilidad-app
+    ports:
+      - "8000:8000"
+    environment:
+      # Supabase PostgreSQL
+      - DATABASE_URL=${DATABASE_URL}
+      # Upstash Redis
+      - REDIS_URL=${REDIS_URL}
+      # OpenAI
+      - LLM_SERVICE=openai
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-3.5-turbo}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-ada-002}
+      # Slack (opcional)
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+      # Config
+      - SCRAPING_SCHEDULE=${SCRAPING_SCHEDULE:-0 2 * * 0}
+      - RESPONSE_CACHE_TTL=${RESPONSE_CACHE_TTL:-604800}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
