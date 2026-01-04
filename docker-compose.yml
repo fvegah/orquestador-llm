@@ -1,32 +1,190 @@
 version: '3.8'
 
 services:
+  # ============================================
+  # APLICACIÓN PRINCIPAL
+  # ============================================
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: orquestador-llm
+    ports:
+      - "8000:8000"
+    environment:
+      - DATABASE_URL=postgresql://postgres:postgres@postgres:5432/contabilidad_db
+      - REDIS_URL=redis://redis:6379/0
+      - OLLAMA_HOST=http://ollama:11434
+      - LLM_SERVICE=${LLM_SERVICE:-ollama}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-mistral}
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-text-embedding-ada-002}
+      - SLACK_BOT_TOKEN=${SLACK_BOT_TOKEN:-}
+      - SLACK_APP_TOKEN=${SLACK_APP_TOKEN:-}
+      - SLACK_SIGNING_SECRET=${SLACK_SIGNING_SECRET:-}
+      - SCRAPING_SCHEDULE=${SCRAPING_SCHEDULE:-0 2 * * *}
+      - RESPONSE_CACHE_TTL=${RESPONSE_CACHE_TTL:-86400}
+    volumes:
+      - ./app:/app/app:ro
+      - ./logs:/app/logs
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    restart: unless-stopped
+    networks:
+      - contabilidad-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ============================================
+  # BASE DE DATOS
+  # ============================================
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: postgres-contabilidad
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: contabilidad_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-db.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    restart: unless-stopped
+    networks:
+      - contabilidad-network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # CACHE
+  # ============================================
+  redis:
+    image: redis:7-alpine
+    container_name: redis-contabilidad
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    restart: unless-stopped
+    networks:
+      - contabilidad-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # ============================================
+  # LLM LOCAL (Ollama)
+  # ============================================
   ollama:
     image: ollama/ollama:latest
     container_name: ollama
     ports:
-      - "11434:11434" # Expone el puerto API de Ollama al host
+      - "11434:11434"
     volumes:
-      - ollama_data:/root/.ollama # Persiste los modelos descargados
+      - ollama_data:/root/.ollama
     restart: unless-stopped
+    networks:
+      - contabilidad-network
     # Para habilitar GPU (NVIDIA): descomenta las siguientes líneas
     # deploy:
     #   resources:
     #     reservations:
     #       devices:
     #         - driver: nvidia
-    #           count: 1 # o 'all'
+    #           count: 1
     #           capabilities: [gpu]
 
-  redis:
-    image: redis:alpine # Usar imagen ligera de Redis
-    container_name: redis
-    ports:
-      - "6379:6379" # Expone el puerto de Redis al host
-    volumes:
-      - redis_data:/data # Persiste los datos de Redis
-    restart: unless-stopped
+  # ============================================
+  # INICIALIZACIÓN DE MODELOS
+  # ============================================
+  ollama-init:
+    image: curlimages/curl:latest
+    container_name: ollama-init
+    depends_on:
+      - ollama
+    networks:
+      - contabilidad-network
+    entrypoint: >
+      sh -c "
+        echo 'Esperando Ollama...' &&
+        sleep 10 &&
+        echo 'Descargando modelo mistral...' &&
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"mistral\"}' &&
+        echo 'Descargando modelo de embeddings...' &&
+        curl -X POST http://ollama:11434/api/pull -d '{\"name\": \"nomic-embed-text\"}' &&
+        echo 'Modelos descargados!'
+      "
+    restart: "no"
 
+  # ============================================
+  # ADMINISTRACIÓN (Opcional)
+  # ============================================
+  pgadmin:
+    image: dpage/pgadmin4:latest
+    container_name: pgadmin
+    environment:
+      PGADMIN_DEFAULT_EMAIL: admin@example.com
+      PGADMIN_DEFAULT_PASSWORD: admin
+    ports:
+      - "5050:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    depends_on:
+      - postgres
+    restart: unless-stopped
+    networks:
+      - contabilidad-network
+    profiles:
+      - admin
+
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: redis-commander
+    environment:
+      REDIS_HOSTS: local:redis:6379
+    ports:
+      - "8081:8081"
+    depends_on:
+      - redis
+    restart: unless-stopped
+    networks:
+      - contabilidad-network
+    profiles:
+      - admin
+
+# ============================================
+# VOLÚMENES PERSISTENTES
+# ============================================
 volumes:
-  ollama_data: # Define el volumen nombrado
-  redis_data: # Define el volumen para Redis
+  postgres_data:
+    name: contabilidad_postgres_data
+  redis_data:
+    name: contabilidad_redis_data
+  ollama_data:
+    name: contabilidad_ollama_data
+  pgadmin_data:
+    name: contabilidad_pgadmin_data
+
+# ============================================
+# REDES
+# ============================================
+networks:
+  contabilidad-network:
+    name: contabilidad-network
+    driver: bridge
